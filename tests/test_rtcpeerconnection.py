@@ -10,6 +10,7 @@ from aiortc import (
     RTCPeerConnection,
     RTCSessionDescription,
 )
+from aiortc.contrib.media import MediaPlayer
 from aiortc.exceptions import InternalError, InvalidAccessError, InvalidStateError
 from aiortc.mediastreams import AudioStreamTrack, VideoStreamTrack
 from aiortc.rtcpeerconnection import filter_preferred_codecs, find_common_codecs
@@ -4206,6 +4207,126 @@ a=fmtp:98 apt=97
             [
                 "stable",
                 "have-remote-offer",
+                "stable",
+                "have-remote-offer",
+                "stable",
+                "closed",
+            ],
+        )
+
+    def test_audio_video_player(self):
+        pc1 = RTCPeerConnection()
+        pc2 = RTCPeerConnection()
+
+        pc1_states = track_states(pc1)
+        pc2_states = track_states(pc2)
+
+        self.assertEqual(pc1.iceConnectionState, "new")
+        self.assertEqual(pc1.iceGatheringState, "new")
+        self.assertIsNone(pc1.localDescription)
+        self.assertIsNone(pc1.remoteDescription)
+
+        self.assertEqual(pc2.iceConnectionState, "new")
+        self.assertEqual(pc2.iceGatheringState, "new")
+        self.assertIsNone(pc2.localDescription)
+        self.assertIsNone(pc2.remoteDescription)
+
+        """
+        initial negotiation
+        """
+
+        #  create a media player
+        player = MediaPlayer('./tests/file.mp4')
+
+        #  check tracks
+        self.assertIsNotNone(player.audio)
+        self.assertIsNotNone(player.video)
+
+        #  create offer
+        pc1.addTrack(player.audio)
+        pc1.addTrack(player.video)
+
+        # create offer
+        #  pc1.addTrack(AudioStreamTrack())
+        #  pc1.addTrack(VideoStreamTrack())
+
+        offer = run(pc1.createOffer())
+        self.assertEqual(offer.type, "offer")
+
+        run(pc1.setLocalDescription(offer))
+        self.assertEqual(pc1.iceConnectionState, "new")
+        self.assertEqual(pc1.iceGatheringState, "complete")
+        self.assertEqual(mids(pc1), ["0", "1"])
+        self.assertTrue("a=group:BUNDLE 0 1" in pc1.localDescription.sdp)
+        self.assertTrue("m=audio " in pc1.localDescription.sdp)
+
+        # handle offer
+        run(pc2.setRemoteDescription(pc1.localDescription))
+        self.assertEqual(pc2.remoteDescription, pc1.localDescription)
+        self.assertEqual(len(pc2.getReceivers()), 2)
+        self.assertEqual(len(pc2.getSenders()), 2)
+        self.assertEqual(len(pc2.getTransceivers()), 2)
+        self.assertEqual(mids(pc2), ["0", "1"])
+
+        # create answer
+        answer = run(pc2.createAnswer())
+        self.assertEqual(answer.type, "answer")
+        self.assertTrue("a=group:BUNDLE 0 1" in answer.sdp)
+        self.assertTrue("m=audio " in answer.sdp)
+        self.assertTrue("m=video " in answer.sdp)
+
+        run(pc2.setLocalDescription(answer))
+        self.assertEqual(pc2.iceConnectionState, "checking")
+        self.assertEqual(pc2.iceGatheringState, "complete")
+        self.assertEqual(mids(pc2), ["0", "1"])
+        self.assertTrue("a=group:BUNDLE 0 1" in pc2.localDescription.sdp)
+        self.assertTrue("m=audio " in pc2.localDescription.sdp)
+        self.assertTrue("m=video " in pc2.localDescription.sdp)
+
+        # handle answer
+        run(pc1.setRemoteDescription(pc2.localDescription))
+        self.assertEqual(pc1.remoteDescription, pc2.localDescription)
+        self.assertEqual(pc1.iceConnectionState, "checking")
+
+        # check outcome
+        self.assertIceCompleted(pc1, pc2)
+
+        # allow media to flow long enough to collect stats
+        run(asyncio.sleep(2))
+
+        # close
+        run(pc1.close())
+        run(pc2.close())
+
+        self.assertEqual(pc1.iceConnectionState, "closed")
+        self.assertEqual(pc2.iceConnectionState, "closed")
+
+        # check state changes
+        self.assertEqual(
+            pc1_states["iceConnectionState"], ["new", "checking", "completed", "closed"]
+        )
+        self.assertEqual(
+            pc1_states["iceGatheringState"], ["new", "gathering", "complete"]
+        )
+        self.assertEqual(
+            pc1_states["signalingState"],
+            [
+                "stable",
+                "have-local-offer",
+                "stable",
+                "closed",
+            ],
+        )
+
+        self.assertEqual(
+            pc2_states["iceConnectionState"], ["new", "checking", "completed", "closed"]
+        )
+        self.assertEqual(
+            pc2_states["iceGatheringState"], ["new", "gathering", "complete"]
+        )
+        self.assertEqual(
+            pc2_states["signalingState"],
+            [
                 "stable",
                 "have-remote-offer",
                 "stable",
